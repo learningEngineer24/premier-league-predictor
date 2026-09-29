@@ -27,6 +27,7 @@ src/
   backtest.py     # v1 walk-forward validation harness (frozen)
   tune.py         # hyper-parameter tuning on 2024-25/2025-26 (never on eval weeks)
   backtest_v2.py  # final evaluation: v1 vs v2 vs Elo vs baselines
+  review_analysis.py  # bootstrap CIs, shrinkage/decay ablation, draw diagnosis
 data/raw/         # match results, 2021-22 through 2026-27 (football-data.co.uk)
 outputs/          # backtest predictions, metrics, tuned params (generated)
 ```
@@ -88,16 +89,71 @@ Per-week log loss (v1 / v2 / Elo / book): week 1: 0.975/0.948/1.036/0.986 ·
 week 2: 0.878/0.927/0.928/0.976 · week 3: 1.058/1.042/1.048/1.047 ·
 week 4: 1.156/1.125/1.173/1.173 · week 5: 1.689/1.144/1.066/1.080.
 
-What changed: the Coventry failure is gone — v2 gave Coventry 14.5% at Forest
-instead of ~0.4%, and week 5 log loss fell from 1.689 to 1.144. Draw
+What changed: the Coventry failure is gone — v2 gave Coventry 7.4% at Forest
+instead of 0.04%, and week 5 log loss fell from 1.689 to 1.144. Draw
 calibration improved (0.275 predicted vs 0.320 actual, up from 0.237), though
-draws remain the hardest outcome for every model (Elo: 0.245). v2 beats the
-bookmakers on all three metrics; Elo is a close second and was the most robust
-in chaotic week 5.
+draws remain the hardest outcome for every model (Elo: 0.245). v2 is
+directionally ahead of the bookmakers on all three metrics, but on 50 games
+every one of these gaps is well within noise — see Uncertainty below. Elo is a
+close second and was the most robust in chaotic week 5.
 
 **Verdict: carry forward v2 Dixon–Coles** (shrinkage + 180-day decay). Keep Elo
 as the standing challenger — with only 50 evaluation games the gap is small,
 and Elo handled the upset-heavy week best.
+
+## Uncertainty: how much do 50 games actually say?
+
+Added Sep 29, 2026, after an external review. Every headline above is a point
+estimate on 50 games. Paired bootstrap (10,000 resamples) on per-game metric
+differences:
+
+| Pair | Metric | Mean diff | SE | 95% CI |
+|------|--------|-----------|----|--------|
+| v2 − book | log loss | −0.0150 | 0.0446 | [−0.105, +0.069] |
+| v2 − book | Brier | −0.0141 | 0.0292 | [−0.074, +0.040] |
+| v2 − Elo | log loss | −0.0128 | 0.0272 | [−0.063, +0.042] |
+| v2 − v1 | log loss | −0.1141 | 0.1098 | [−0.356, +0.044] |
+| Elo − book | log loss | −0.0022 | 0.0369 | [−0.075, +0.068] |
+
+Negative = first model better. Every interval comfortably includes zero: on
+50 games, no model is distinguishably better than any other. Detecting a
+0.015/game log-loss edge at 80% power would take ~3,000 games (~8 seasons).
+The honest reading: v2 and Elo are competitive with the bookmakers; the
+ranking between them is unresolved. The highest-value "modeling" work right
+now is simply accumulating the track record — at 380 games (a full season)
+these comparisons start to mean something.
+
+Reproduce: `cd src && python review_analysis.py` (writes
+`outputs/review_analysis.json`).
+
+## Ablation: what actually drove the v1 → v2 improvement?
+
+Same 50-game walk-forward, four Dixon–Coles configs (pooled log loss):
+
+| Config | Log loss |
+|--------|----------|
+| neither (v1) | 1.1513 |
+| shrinkage only (σ=0.5) | 1.0812 |
+| time decay only (180d) | 1.1406 |
+| both (v2) | 1.0373 |
+
+Shrinkage does most of the work; decay adds a little more on top. But a
+caveat that matters more than the table: 91.9% of the total v1→v2 log-loss
+gain (5.24 of 5.70 nats) comes from a single game — Nott'm Forest 0–1
+Coventry. On the other 49 games v2 is barely distinguishable from v1. The
+shrinkage fix remains the right fix — it's principled and was tuned on
+held-out data — but the evaluation "victory" is one anecdote, not a trend.
+
+## Draw diagnosis: the "draw problem" was a small-sample artifact
+
+The 50-game eval window had an unusually draw-heavy 32% actual draw rate
+(long-run Premier League: ~25–27%), and every model "underpredicted" draws
+there. But walk-forward on the 760-game tuning window (2024-25/2025-26, never
+the eval weeks) with v2 parameters: mean predicted draw 0.251 vs actual draw
+rate 0.259 (SE 0.016) — essentially perfectly calibrated. There is no
+structural draw problem in the model; the eval-window gap is noise. Draw
+calibration is demoted from the v3 list (kept as a watch item, not a build
+item).
 
 ## Tuning detail (held-out seasons 2024-25/2025-26, 760 games)
 
@@ -112,12 +168,27 @@ margin-of-victory on (1.0093; next best 1.0099).
 
 ## Roadmap (v3 ideas)
 
+Reordered Sep 29, 2026 after the external review + the analyses above.
+
 - [x] **Shrinkage** — done (σ=0.5 Gaussian prior on team strengths).
 - [x] **Time-decay weighting** — done (180-day half-life).
 - [x] **Elo challenger** — done; kept as standing challenger.
-- [ ] **Ensemble** — average v2 DC and Elo probabilities; Elo's week-5
-      robustness suggests the blend may beat either alone.
-- [ ] **Draw calibration** — every model underpredicts draws; investigate a
-      stronger low-score correction or post-hoc calibration.
-- [ ] **Expected-goals features** — xG for/against from Understat or FBref as
-      a team-strength input, less noisy than raw goals.
+- [x] **Uncertainty quantification** — done: bootstrap CIs on all paired
+      metric differences (`src/review_analysis.py`); no more naked point
+      estimates.
+- [x] **Ablation** — done: shrinkage does most of the work, decay adds a
+      little; 91.9% of the v1→v2 gain is the single Forest–Coventry game.
+- [x] **Draw diagnosis** — done: no structural draw problem (0.251 predicted
+      vs 0.259 actual on the 760-game tuning window). Demoted from build item
+      to watch item.
+- [ ] **Ensemble** — average v2 DC and Elo probabilities; tune the weight on
+      the tuning seasons. Cheapest experiment on the list, and Elo's week-5
+      robustness suggests genuine complementarity. *Do first.*
+- [ ] **Expected-goals features** — xG for/against as a team-strength input,
+      less noisy than raw goals; attacks the same small-sample problem that
+      motivated v2. (The raw data files already carry shots/xG columns.)
+      *Do second.*
+- [ ] **Injuries** — honest walk-forward injury data with real player-impact
+      weighting. High effort, uncertain payoff. *Do last, if at all.*
+- [ ] **Accumulate the track record** — the highest-EV item: let weeks 6–38
+      happen. At 380 games the bookmaker comparison is actually powered.

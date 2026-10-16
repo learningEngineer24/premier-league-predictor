@@ -28,10 +28,13 @@ RAW_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 
 _SEASON_RE = re.compile(r"E0_(\d{2})(\d{2})\.csv$")
 
-# Columns we keep. Everything else (shots, corners, cards, xG, ...) is ignored
+# Columns we keep. Everything else (shots, corners, cards, ...) is ignored
 # for v1 -- the model only needs the final scores.
 _KEEP_COLS = ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG", "FTR",
               "AvgH", "AvgD", "AvgA"]
+# xG columns exist only in the 2026-27 file (football-data.co.uk publishes no
+# xG for earlier E0 seasons, verified Oct 15, 2026). Older seasons get NaN.
+_XG_COLS = ["HxG", "AxG"]
 
 
 def season_label(filename: str) -> str:
@@ -44,7 +47,9 @@ def season_label(filename: str) -> str:
 
 def load_season(path: Path) -> pd.DataFrame:
     """Load one season CSV into a clean, chronologically sorted DataFrame."""
-    df = pd.read_csv(path, encoding="utf-8-sig", usecols=_KEEP_COLS)
+    header = pd.read_csv(path, encoding="utf-8-sig", nrows=0).columns
+    usecols = [c for c in _KEEP_COLS + _XG_COLS if c in header]
+    df = pd.read_csv(path, encoding="utf-8-sig", usecols=usecols)
 
     # --- parse ---
     df["date"] = pd.to_datetime(df["Date"], format="%d/%m/%Y")
@@ -53,13 +58,20 @@ def load_season(path: Path) -> pd.DataFrame:
         "FTHG": "home_goals", "FTAG": "away_goals",
         "FTR": "result",
         "AvgH": "avg_h", "AvgD": "avg_d", "AvgA": "avg_a",
+        "HxG": "hxg", "AxG": "axg",
     })
     df["season"] = season_label(path.name)
+    # Seasons without xG columns (everything before 2026-27) get NaN.
+    for col in ("hxg", "axg"):
+        if col not in df.columns:
+            df[col] = np.nan
 
     # --- sanity checks (fail loudly; silent bad data is worse than a crash) ---
     key = ["season", "home_team", "away_team"]
     assert df[key].notna().all().all(), "missing team names"
     assert df[["home_goals", "away_goals"]].notna().all().all(), "missing scores"
+    assert ((df["hxg"].isna()) | (df["hxg"] >= 0)).all(), "negative HxG"
+    assert ((df["axg"].isna()) | (df["axg"] >= 0)).all(), "negative AxG"
     assert df["result"].isin(["H", "D", "A"]).all(), "unexpected result codes"
     assert not df.duplicated(subset=key).any(), "duplicate fixtures found"
 
@@ -75,7 +87,7 @@ def load_season(path: Path) -> pd.DataFrame:
     df["matchweek"] = (np.arange(len(df)) // 10) + 1
 
     return df[["season", "matchweek", "date", "home_team", "away_team",
-               "home_goals", "away_goals", "result",
+               "home_goals", "away_goals", "result", "hxg", "axg",
                "avg_h", "avg_d", "avg_a"]]
 
 

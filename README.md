@@ -111,6 +111,7 @@ differences:
 |------|--------|-----------|----|--------|
 | v2 − book | log loss | −0.0150 | 0.0446 | [−0.105, +0.069] |
 | v2 − book | Brier | −0.0141 | 0.0292 | [−0.074, +0.040] |
+| v2 − book | accuracy | +0.020 | 0.053 | [−0.080, +0.120] |
 | v2 − Elo | log loss | −0.0128 | 0.0272 | [−0.063, +0.042] |
 | v2 − v1 | log loss | −0.1141 | 0.1098 | [−0.356, +0.044] |
 | Elo − book | log loss | −0.0022 | 0.0369 | [−0.075, +0.068] |
@@ -166,9 +167,12 @@ Half-life at σ=0.5: 90d → 1.0150, **180d → 1.0079**, 365d → 1.0100,
 730d → 1.0155, none → 1.0249. Elo grid winner: k=32, home bonus 50,
 margin-of-victory on (1.0093; next best 1.0099).
 
-## Roadmap (v3 ideas)
+## Roadmap
 
-Reordered Sep 29, 2026 after the external review + the analyses above.
+Versions are numbered in build order. v3 is the absence model (in build);
+v4 is xG features (parked to ~January 2027, when ~190 games of xG exist --
+the Oct 15 one-parameter nudge on 50 games came back null, `src/xg_nudge.py`
+kept as the re-run harness).
 
 - [x] **Shrinkage** — done (σ=0.5 Gaussian prior on team strengths).
 - [x] **Time-decay weighting** — done (180-day half-life).
@@ -181,14 +185,20 @@ Reordered Sep 29, 2026 after the external review + the analyses above.
 - [x] **Draw diagnosis** — done: no structural draw problem (0.251 predicted
       vs 0.259 actual on the 760-game tuning window). Demoted from build item
       to watch item.
-- [ ] **Ensemble** — average v2 DC and Elo probabilities; tune the weight on
-      the tuning seasons. Cheapest experiment on the list, and Elo's week-5
-      robustness suggests genuine complementarity. *Do first.*
-- [ ] **Expected-goals features** — xG for/against as a team-strength input,
-      less noisy than raw goals; attacks the same small-sample problem that
-      motivated v2. (The raw data files already carry shots/xG columns.)
-      *Do second.*
-- [ ] **Injuries** — honest walk-forward injury data with real player-impact
-      weighting. High effort, uncertain payoff. *Do last, if at all.*
+- [x] **Ensemble** — done Oct 8: average v2 DC and Elo probabilities at
+      w=0.55 v2/Elo, tuned on the tuning seasons (gain within bootstrap-CI
+      noise, kept for robustness).
+- [ ] **v3 — absence model** — built + validated overnight Oct 15-16, verdict
+      DO NOT INCLUDE: gamma*=0.125 (tuned 2024-25, stable interior optimum),
+      but Phase 2 on 2025-26 (n=340, fully out-of-sample) came back null --
+      all paired bootstrap CIs cover zero. Diagnostic: the 60% regular
+      threshold dilutes the signal with rotation (only 26.5% of absences are
+      nailed-on regulars). Pre-registered follow-up: re-test with a
+      >=80-85% regular threshold. `src/absence_v3.py`,
+      `outputs/absence_v3_summary.json`.
+- [ ] **v4 — expected-goals features** — parked to ~Jan 2027. xG for/against
+      as a team-strength input, less noisy than raw goals; attacks the same
+      small-sample problem that motivated v2. Blocked on data: HxG/AxG exist
+      only for 2026-27 (football-data.co.uk publishes no historical xG).
 - [ ] **Accumulate the track record** — the highest-EV item: let weeks 6–38
       happen. At 380 games the bookmaker comparison is actually powered.

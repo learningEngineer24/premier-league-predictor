@@ -149,7 +149,8 @@ def _unpack_params(theta, n_teams):
     return attack, defense, home_adv, rho
 
 
-def _nll_and_grad(theta, h, a, x, y, n, w=None, prior_prec=0.0):
+def _nll_and_grad(theta, h, a, x, y, n, w=None, prior_prec=0.0,
+                  home_prior_prec=0.0):
     """Negative log-likelihood and its analytic gradient.
 
     h, a: int arrays of home/away team indices; x, y: goals; n: # teams.
@@ -158,6 +159,11 @@ def _nll_and_grad(theta, h, a, x, y, n, w=None, prior_prec=0.0):
     prior_prec: 1/sigma^2 of the Gaussian prior on team strengths
         (L2 shrinkage); 0.0 = pure MLE. The prior applies only to team
         strengths, not to home_adv or rho.
+    home_prior_prec: 1/sigma^2 of an optional Gaussian prior on home_adv
+        itself, N(0, sigma^2); 0.0 = no prior on home advantage. Added
+        Oct 29, 2026 (MW9 spec): the 2024-25 tune-window test found a
+        sigma=0.15 prior on home_adv was the only home-shrink variant
+        whose paired bootstrap CI excluded zero.
 
     The gradient is derived by hand with the chain rule -- this is the
     "boring but important" part of MLE: for each match,
@@ -234,6 +240,14 @@ def _nll_and_grad(theta, h, a, x, y, n, w=None, prior_prec=0.0):
         grad_prior[n_free:2 * n_free] = prior_prec * (
             defense[:last] - defense[last])
 
+    # --- Optional Gaussian prior on home_adv itself: N(0, home_sigma^2) ---
+    # Penalises the home-advantage term toward zero. home_adv is a free
+    # parameter (index 2*(n-1) in theta), so the gradient is direct.
+    if home_prior_prec > 0.0:
+        ha_i = 2 * (n - 1)
+        nll_prior += 0.5 * home_prior_prec * home_adv ** 2
+        grad_prior[ha_i] += home_prior_prec * home_adv
+
     # Objective minimised:  nll_total = -loglik + prior_nll, so
     #   d(nll_total)/d theta = -d(loglik)/d theta + d(prior_nll)/d theta
     #                        = -grad_ll + grad_prior.
@@ -243,7 +257,8 @@ def _nll_and_grad(theta, h, a, x, y, n, w=None, prior_prec=0.0):
     return nll + nll_prior, grad_prior - grad_ll
 
 
-def fit(df, prior_sigma=None, half_life_days=None, verbose=False):
+def fit(df, prior_sigma=None, half_life_days=None, verbose=False,
+        home_prior_sigma=None):
     """Fit a DixonColesModel by maximum likelihood on a matches DataFrame.
 
     Expects columns: home_team, away_team, home_goals, away_goals.
@@ -255,6 +270,10 @@ def fit(df, prior_sigma=None, half_life_days=None, verbose=False):
         half_life_days: matches lose half their likelihood weight every
             this many days back from the most recent training game.
             None = all matches weighted equally (v1).
+        home_prior_sigma: std of an optional Gaussian prior on the
+            home-advantage term itself. None = no prior (pre-MW9 spec).
+            The live spec from MW9 (Oct 2026) uses 0.15, adopted from the
+            2024-25 tune-window shrink test.
     Returns a DixonColesModel.
     """
     teams = sorted(set(df["home_team"]) | set(df["away_team"]))
@@ -267,6 +286,8 @@ def fit(df, prior_sigma=None, half_life_days=None, verbose=False):
     y = df["away_goals"].to_numpy(dtype=float)
 
     prior_prec = 0.0 if prior_sigma is None else 1.0 / prior_sigma ** 2
+    home_prior_prec = (0.0 if home_prior_sigma is None
+                       else 1.0 / home_prior_sigma ** 2)
 
     w = None
     if half_life_days is not None:
@@ -283,7 +304,8 @@ def fit(df, prior_sigma=None, half_life_days=None, verbose=False):
     # scoring rates; the penalty inside _nll_and_grad guards the boundary.
     bounds = [(None, None)] * (2 * (n - 1) + 1) + [(-0.5, 0.5)]
 
-    res = minimize(_nll_and_grad, theta0, args=(h, a, x, y, n, w, prior_prec),
+    res = minimize(_nll_and_grad, theta0,
+                   args=(h, a, x, y, n, w, prior_prec, home_prior_prec),
                    method="L-BFGS-B", jac=True, bounds=bounds,
                    options={"maxiter": 5000})
     if not res.success:
